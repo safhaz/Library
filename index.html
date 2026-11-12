@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Library – Issue or Return a Book</title>
+<meta name="theme-color" content="#1d3a2f">
+<style>
+  :root{
+    --ink:#1b2a24; --muted:#5d6b64; --line:#dfe4dd; --paper:#f6f4ee; --card:#fff;
+    --brand:#1d3a2f; --brand-2:#2f5d4a;
+    --ok:#1f7a4d; --ok-bg:#e7f4ec; --warn:#9a5b00; --warn-bg:#fdf1de; --err:#a3302a; --err-bg:#fbe9e7;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;background:var(--paper);color:var(--ink);font-size:16px;line-height:1.45;-webkit-font-smoothing:antialiased}
+  header{background:var(--brand);color:#fff;padding:22px 20px 56px}
+  header .wrap{max-width:520px;margin:0 auto;display:flex;gap:14px;align-items:center}
+  .logo{width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,.12);display:grid;place-items:center;flex:none}
+  header h1{font-size:20px;margin:0;font-weight:650}
+  header p{margin:2px 0 0;opacity:.75;font-size:14px}
+  main{max-width:520px;margin:-40px auto 40px;padding:0 14px}
+  .card{background:var(--card);border-radius:14px;box-shadow:0 1px 2px rgba(0,0,0,.05),0 8px 24px rgba(27,42,36,.07);padding:22px}
+  .q{margin-bottom:20px}
+  .q label{display:flex;align-items:center;gap:10px;font-weight:600;margin-bottom:9px}
+  .num{width:24px;height:24px;border-radius:50%;background:var(--brand);color:#fff;font-size:13px;display:grid;place-items:center;flex:none}
+  select,input[type=email]{width:100%;font:inherit;padding:13px 14px;border:1.5px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);outline:none;appearance:none;-webkit-appearance:none}
+  select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%235d6b64' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;padding-right:40px}
+  select:disabled{background-color:#f5f6f3;color:var(--muted)}
+  select:focus,input:focus{border-color:var(--brand-2)}
+  .hint{font-size:13px;color:var(--muted);margin-top:6px}
+  .who{display:none;font-size:14px;color:var(--muted);background:#f3f5f1;border-radius:10px;padding:10px 12px;margin-bottom:20px}
+  .who b{color:var(--ink);font-weight:600;word-break:break-all}
+  .who button{border:0;background:none;color:var(--brand-2);font:inherit;font-weight:600;cursor:pointer;padding:0;margin-left:4px;text-decoration:underline}
+  .first{display:none;margin-bottom:20px;padding-bottom:20px;border-bottom:1px dashed var(--line)}
+  .submit{width:100%;margin-top:6px;font:inherit;font-weight:650;font-size:17px;padding:15px;border:0;border-radius:12px;background:var(--brand);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px}
+  .submit:disabled{opacity:.45;cursor:not-allowed}
+  .spin{width:18px;height:18px;border:2.5px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:s .8s linear infinite;display:none}
+  .busy .spin{display:block}
+  @keyframes s{to{transform:rotate(360deg)}}
+  .alert{display:none;margin-bottom:14px;padding:11px 13px;border-radius:10px;background:var(--err-bg);color:var(--err);font-size:14px}
+  .result{display:none;text-align:center;padding:10px 4px 4px}
+  .result .icon{width:64px;height:64px;border-radius:50%;margin:4px auto 14px;display:grid;place-items:center}
+  .result.ok .icon{background:var(--ok-bg);color:var(--ok)}
+  .result.warn .icon{background:var(--warn-bg);color:var(--warn)}
+  .result.err .icon{background:var(--err-bg);color:var(--err)}
+  .result h2{margin:0 0 8px;font-size:21px}
+  .result p{margin:0 auto 6px;color:var(--muted);max-width:400px}
+  .again{margin-top:18px;font:inherit;font-weight:600;padding:12px 22px;border-radius:10px;border:1.5px solid var(--line);background:#fff;cursor:pointer}
+  .setup{background:var(--warn-bg);color:var(--warn);padding:14px;border-radius:10px;font-size:14px;margin-bottom:16px;display:none}
+  footer{text-align:center;color:var(--muted);font-size:13px;margin-top:18px}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="logo" aria-hidden="true">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2.5Z"/><path d="M8 7h7M8 11h5"/></svg>
+    </div>
+    <div><h1 id="libName">Library</h1><p>Issue or return a book</p></div>
+  </div>
+</header>
+
+<main>
+  <div class="card">
+    <div class="setup" id="setupMsg">This page is not connected yet. Open <b>config.js</b> and paste your Supabase URL and key.</div>
+
+    <form id="form" novalidate>
+      <!-- Shown only the first time on this phone -->
+      <div class="first" id="first">
+        <label for="email" style="display:block;font-weight:600;margin-bottom:9px">Your work email</label>
+        <input type="email" id="email" autocomplete="email" inputmode="email">
+        <div class="hint">Asked only once. This phone will remember it.</div>
+      </div>
+      <div class="who" id="who">Submitting as <b id="whoEmail"></b> <button type="button" id="change">Not you?</button></div>
+
+      <div class="alert" id="alert"></div>
+
+      <div class="q">
+        <label for="action"><span class="num">1</span>What would you like to do?</label>
+        <select id="action">
+          <option value="">Choose…</option>
+          <option value="issue">Issue a book</option>
+          <option value="return">Return a book</option>
+        </select>
+      </div>
+
+      <div class="q">
+        <label for="book"><span class="num">2</span>Which book?</label>
+        <select id="book" disabled><option value="">Choose what you'd like to do first</option></select>
+        <div class="hint" id="bookHint"></div>
+      </div>
+
+      <button class="submit" id="submit" type="submit" disabled><span class="spin"></span><span id="submitText">Submit</span></button>
+    </form>
+
+    <div class="result" id="result" aria-live="polite">
+      <div class="icon" id="resIcon"></div>
+      <h2 id="resTitle"></h2>
+      <p id="resMsg"></p>
+      <p id="resMail" style="font-size:14px"></p>
+      <button class="again" id="again" type="button">Done – start again</button>
+    </div>
+  </div>
+  <footer id="foot"></footer>
+</main>
+
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script>
+(() => {
+  const C = window.LIBRARY_CONFIG || {};
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const store = {
+    get(k){ try{ return localStorage.getItem(k) }catch{ return null } },
+    set(k,v){ try{ localStorage.setItem(k,v) }catch{} },
+    del(k){ try{ localStorage.removeItem(k) }catch{} },
+  };
+  let memEmail = store.get("lib_email") || "";
+
+  $("libName").textContent = C.LIBRARY_NAME || "Library";
+  $("email").placeholder = C.EMAIL_HINT || "name@company.com";
+  $("foot").textContent = (C.TEAM_NAME || "Library team") + " · Books are lent for " + (C.LOAN_DAYS || 30) + " days";
+
+  const configured = C.SUPABASE_URL && !/YOUR-PROJECT/.test(C.SUPABASE_URL) && C.SUPABASE_ANON_KEY && !/PASTE/.test(C.SUPABASE_ANON_KEY);
+  if (!configured) { $("setupMsg").style.display = "block"; return; }
+  const sb = supabase.createClient(C.SUPABASE_URL, C.SUPABASE_ANON_KEY, { auth: { persistSession: false } });
+
+  let books = [];
+  const preselect = new URLSearchParams(location.search).get("book");
+
+  function showWho() {
+    const has = !!memEmail;
+    $("first").style.display = has ? "none" : "block";
+    $("who").style.display = has ? "block" : "none";
+    $("whoEmail").textContent = memEmail;
+    validate();
+  }
+  $("change").addEventListener("click", () => { memEmail = ""; store.del("lib_email"); $("email").value = ""; showWho(); $("email").focus(); });
+
+  async function loadBooks() {
+    const { data, error } = await sb.rpc("public_catalog");
+    if (error) { showAlert("Could not load the book list. Please refresh the page."); console.error(error); return; }
+    books = data || [];
+    if (preselect && !$("action").value) {
+      const b = books.find(x => x.book_id === preselect);
+      if (b) { $("action").value = b.is_out ? "return" : "issue"; fillBooks(); $("book").value = b.book_id; }
+    }
+    fillBooks(true);
+  }
+
+  function fillBooks(keep) {
+    const action = $("action").value, sel = $("book"), prev = keep ? sel.value : "";
+    if (!action) { sel.disabled = true; sel.innerHTML = '<option value="">Choose what you\'d like to do first</option>'; $("bookHint").textContent = ""; validate(); return; }
+    const list = books.filter(b => action === "issue" ? b.available : b.is_out);
+    sel.disabled = false;
+    if (!list.length) {
+      sel.innerHTML = `<option value="">${action === "issue" ? "No books are available right now" : "No books are currently issued"}</option>`;
+      $("bookHint").textContent = ""; validate(); return;
+    }
+    let html = '<option value="">Choose a book…</option>';
+    const groups = new Map();
+    for (const b of list) { const t = b.theme || "Other"; if (!groups.has(t)) groups.set(t, []); groups.get(t).push(b); }
+    for (const [theme, items] of groups) {
+      html += `<optgroup label="${esc(theme)}">` + items.map(b =>
+        `<option value="${esc(b.book_id)}">${esc(b.title)}${b.author ? " – " + esc(String(b.author).trim()) : ""}</option>`).join("") + "</optgroup>";
+    }
+    sel.innerHTML = html;
+    if (prev && list.some(b => b.book_id === prev)) sel.value = prev;
+    $("bookHint").textContent = action === "issue" ? `${list.length} books available` : "Showing books that are currently issued";
+    validate();
+  }
+
+  function currentEmail() { return memEmail || $("email").value.trim().toLowerCase(); }
+  function validate() {
+    $("submit").disabled = !(/\S+@\S+\.\S+/.test(currentEmail()) && $("action").value && $("book").value);
+    $("submitText").textContent = $("action").value === "return" ? "Return this book" : $("action").value === "issue" ? "Issue this book" : "Submit";
+  }
+  function showAlert(t) { $("alert").textContent = t; $("alert").style.display = t ? "block" : "none"; }
+
+  $("action").addEventListener("change", () => { fillBooks(); showAlert(""); });
+  $("book").addEventListener("change", validate);
+  $("email").addEventListener("input", validate);
+
+  const icons = {
+    ok: '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+    warn: '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 7v6M12 17h.01"/></svg>',
+    err: '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg>',
+  };
+  const titles = {
+    issued: ["ok", "Book issued!"], returned: ["ok", "Book returned!"],
+    already_issued: ["warn", "Book already issued"], already_returned: ["warn", "Already returned"],
+    no_record: ["warn", "No borrowing record"], error: ["err", "Something went wrong"],
+  };
+
+  $("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = currentEmail(), action = $("action").value, book_id = $("book").value;
+    if (!email || !action || !book_id) return;
+    showAlert("");
+    $("submit").disabled = true; $("submit").classList.add("busy");
+    try {
+      const res = await fetch(C.SUPABASE_URL.replace(/\/$/, "") + "/functions/v1/library-action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: C.SUPABASE_ANON_KEY },
+        body: JSON.stringify({ email, action, book_id }),
+      });
+      const out = await res.json().catch(() => ({}));
+      if (out.outcome === "unknown_user") {
+        memEmail = ""; store.del("lib_email"); showWho();
+        showAlert(out.message); return;
+      }
+      if (!out.outcome) { showAlert(out.message || "Something went wrong. Please try again."); return; }
+      memEmail = email; store.set("lib_email", email);
+      const [kind, title] = titles[out.outcome] || ["err", "Something went wrong"];
+      $("result").className = "result " + kind;
+      $("resIcon").innerHTML = icons[kind];
+      $("resTitle").textContent = title;
+      $("resMsg").textContent = out.message || "";
+      $("resMail").textContent = out.outcome === "error" ? "" : "A confirmation email has been sent to " + email + ".";
+      $("form").style.display = "none"; $("result").style.display = "block";
+      loadBooks();
+    } catch (err) {
+      console.error(err);
+      showAlert("Could not reach the library system. Check your internet connection and try again.");
+    } finally {
+      $("submit").classList.remove("busy"); validate();
+    }
+  });
+
+  $("again").addEventListener("click", () => {
+    $("action").value = ""; fillBooks(); showWho();
+    $("result").style.display = "none"; $("form").style.display = "block";
+  });
+
+  showWho();
+  loadBooks();
+})();
+</script>
+</body>
+</html>
