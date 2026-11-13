@@ -48,6 +48,10 @@
   .result p{margin:0 auto 6px;color:var(--muted);max-width:400px}
   .again{margin-top:18px;font:inherit;font-weight:600;padding:12px 22px;border-radius:10px;border:1.5px solid var(--line);background:#fff;cursor:pointer}
   .setup{background:var(--warn-bg);color:var(--warn);padding:14px;border-radius:10px;font-size:14px;margin-bottom:16px;display:none}
+  .info{display:none;margin-top:10px;padding:12px 13px;border-radius:10px;font-size:14px;line-height:1.5}
+  .info.ok{display:block;background:var(--ok-bg);color:var(--ok)}
+  .info.warn{display:block;background:var(--warn-bg);color:#6e4300}
+  .info b{font-weight:650}
   footer{text-align:center;color:var(--muted);font-size:13px;margin-top:18px}
 </style>
 </head>
@@ -89,6 +93,7 @@
         <label for="book"><span class="num">2</span>Which book?</label>
         <select id="book" disabled><option value="">Choose what you'd like to do first</option></select>
         <div class="hint" id="bookHint"></div>
+        <div class="info" id="bookInfo"></div>
       </div>
 
       <button class="submit" id="submit" type="submit" disabled><span class="spin"></span><span id="submitText">Submit</span></button>
@@ -99,6 +104,7 @@
       <h2 id="resTitle"></h2>
       <p id="resMsg"></p>
       <p id="resMail" style="font-size:14px"></p>
+      <button class="submit" id="joinBtn" type="button" style="display:none;margin-top:16px"><span class="spin"></span><span>Join the queue</span></button>
       <button class="again" id="again" type="button">Done – start again</button>
     </div>
   </div>
@@ -117,11 +123,15 @@
     set(k,v){ try{ localStorage.setItem(k,v) }catch{} },
     del(k){ try{ localStorage.removeItem(k) }catch{} },
   };
+  const day = (d) => d ? new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "";
+  const short = (d) => d ? new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "";
   let memEmail = store.get("lib_email") || "";
+  let S = { default_loan_days: 15, hold_days: 3 };
 
   $("libName").textContent = C.LIBRARY_NAME || "Library";
   $("email").placeholder = C.EMAIL_HINT || "name@company.com";
-  $("foot").textContent = (C.TEAM_NAME || "Library team") + " · Books are lent for " + (C.LOAN_DAYS || 30) + " days";
+  const setFoot = () => $("foot").textContent = (C.TEAM_NAME || "Library team") + " · Books are lent for " + S.default_loan_days + " days";
+  setFoot();
 
   const configured = C.SUPABASE_URL && !/YOUR-PROJECT/.test(C.SUPABASE_URL) && C.SUPABASE_ANON_KEY && !/PASTE/.test(C.SUPABASE_ANON_KEY);
   if (!configured) { $("setupMsg").style.display = "block"; return; }
@@ -130,6 +140,7 @@
   let books = [];
   const preselect = new URLSearchParams(location.search).get("book");
 
+  function currentEmail() { return memEmail || $("email").value.trim().toLowerCase(); }
   function showWho() {
     const has = !!memEmail;
     $("first").style.display = has ? "none" : "block";
@@ -137,51 +148,95 @@
     $("whoEmail").textContent = memEmail;
     validate();
   }
-  $("change").addEventListener("click", () => { memEmail = ""; store.del("lib_email"); $("email").value = ""; showWho(); $("email").focus(); });
+  $("change").addEventListener("click", () => { memEmail = ""; store.del("lib_email"); $("email").value = ""; showWho(); loadBooks(); $("email").focus(); });
 
   async function loadBooks() {
-    const { data, error } = await sb.rpc("public_catalog");
+    const email = currentEmail();
+    const { data, error } = await sb.rpc("public_catalog", { p_email: /\S+@\S+\.\S+/.test(email) ? email : null });
     if (error) { showAlert("Could not load the book list. Please refresh the page."); console.error(error); return; }
     books = data || [];
     if (preselect && !$("action").value) {
       const b = books.find(x => x.book_id === preselect);
-      if (b) { $("action").value = b.is_out ? "return" : "issue"; fillBooks(); $("book").value = b.book_id; }
+      if (b) { $("action").value = b.is_out && !b.held_for_me ? "return" : "issue"; fillBooks(); $("book").value = b.book_id; }
     }
     fillBooks(true);
+  }
+  sb.rpc("public_settings").then(({ data }) => { if (data && data[0]) { S = data[0]; setFoot(); showInfo(); } });
+
+  // Label shown in the dropdown for each book
+  function label(b, action) {
+    const name = esc(b.title) + (b.author ? " – " + esc(String(b.author).trim()) : "");
+    if (action !== "issue") return name;
+    if (b.held_for_me) return "★ " + name + " (held for you)";
+    if (b.available) return name;
+    if (b.my_position) return name + ` (you're #${b.my_position} in queue)`;
+    if (b.is_out) return name + ` (issued – back ${short(b.due_date)})`;
+    return name + " (reserved – queue)";
   }
 
   function fillBooks(keep) {
     const action = $("action").value, sel = $("book"), prev = keep ? sel.value : "";
-    if (!action) { sel.disabled = true; sel.innerHTML = '<option value="">Choose what you\'d like to do first</option>'; $("bookHint").textContent = ""; validate(); return; }
-    const list = books.filter(b => action === "issue" ? b.available : b.is_out);
+    if (!action) { sel.disabled = true; sel.innerHTML = '<option value="">Choose what you\'d like to do first</option>'; $("bookHint").textContent = ""; showInfo(); return; }
+    const list = action === "issue" ? books : books.filter(b => b.is_out);
     sel.disabled = false;
     if (!list.length) {
-      sel.innerHTML = `<option value="">${action === "issue" ? "No books are available right now" : "No books are currently issued"}</option>`;
-      $("bookHint").textContent = ""; validate(); return;
+      sel.innerHTML = `<option value="">${action === "issue" ? "No books in the library yet" : "No books are currently issued"}</option>`;
+      $("bookHint").textContent = ""; showInfo(); return;
     }
     let html = '<option value="">Choose a book…</option>';
     const groups = new Map();
     for (const b of list) { const t = b.theme || "Other"; if (!groups.has(t)) groups.set(t, []); groups.get(t).push(b); }
     for (const [theme, items] of groups) {
-      html += `<optgroup label="${esc(theme)}">` + items.map(b =>
-        `<option value="${esc(b.book_id)}">${esc(b.title)}${b.author ? " – " + esc(String(b.author).trim()) : ""}</option>`).join("") + "</optgroup>";
+      html += `<optgroup label="${esc(theme)}">` + items.map(b => `<option value="${esc(b.book_id)}">${label(b, action)}</option>`).join("") + "</optgroup>";
     }
     sel.innerHTML = html;
     if (prev && list.some(b => b.book_id === prev)) sel.value = prev;
-    $("bookHint").textContent = action === "issue" ? `${list.length} books available` : "Showing books that are currently issued";
+    const avail = books.filter(b => b.available || b.held_for_me).length;
+    $("bookHint").textContent = action === "issue"
+      ? `${avail} available now. Books that are out can be requested – you'll join the queue.`
+      : "Showing books that are currently issued";
+    showInfo();
+  }
+
+  // What happens if they submit: "issue", "reserve" (join queue), "return", or "" (nothing to do)
+  function plannedAction() {
+    const action = $("action").value, b = books.find(x => x.book_id === $("book").value);
+    if (!action || !b) return "";
+    if (action === "return") return "return";
+    if (b.available || b.held_for_me) return "issue";
+    if (b.my_position) return "";
+    return "reserve";
+  }
+
+  function showInfo() {
+    const box = $("bookInfo"), b = books.find(x => x.book_id === $("book").value);
+    box.className = "info"; box.innerHTML = "";
+    if ($("action").value === "issue" && b) {
+      const waiting = b.queue_count ? ` ${b.queue_count} ${b.queue_count === 1 ? "person is" : "people are"} already waiting.` : "";
+      if (b.held_for_me) { box.className = "info ok"; box.innerHTML = "<b>This book is being held for you.</b> Tap the button below to issue it."; }
+      else if (b.my_position) { box.className = "info warn"; box.innerHTML = `<b>You're number ${b.my_position} in the queue.</b> We'll email you when it's your turn.`; }
+      else if (b.is_out) {
+        box.className = "info warn";
+        box.innerHTML = `<b>Already issued</b> – expected back on <b>${esc(day(b.due_date))}</b>.${waiting}<br>It's available for future requests: join the queue and we'll email you when it's your turn. It will then be held for you for ${S.hold_days} day${S.hold_days == 1 ? "" : "s"} so nobody else can take it.`;
+      } else if (!b.available) {
+        box.className = "info warn";
+        box.innerHTML = `<b>Reserved</b> – this book has been returned but is being held for the next person in the queue.${waiting}<br>Join the queue to get it after them.`;
+      }
+    }
     validate();
   }
 
-  function currentEmail() { return memEmail || $("email").value.trim().toLowerCase(); }
   function validate() {
-    $("submit").disabled = !(/\S+@\S+\.\S+/.test(currentEmail()) && $("action").value && $("book").value);
-    $("submitText").textContent = $("action").value === "return" ? "Return this book" : $("action").value === "issue" ? "Issue this book" : "Submit";
+    const plan = plannedAction();
+    $("submit").disabled = !(/\S+@\S+\.\S+/.test(currentEmail()) && plan);
+    $("submitText").textContent = { issue: "Issue this book", reserve: "Join the queue", return: "Return this book" }[plan] || "Submit";
   }
   function showAlert(t) { $("alert").textContent = t; $("alert").style.display = t ? "block" : "none"; }
 
-  $("action").addEventListener("change", () => { fillBooks(); showAlert(""); });
-  $("book").addEventListener("change", validate);
+  $("action").addEventListener("change", () => { fillBooks(); showAlert(""); loadBooks(); });   // refresh so availability is up to date
+  $("book").addEventListener("change", showInfo);
   $("email").addEventListener("input", validate);
+  $("email").addEventListener("change", loadBooks);
 
   const icons = {
     ok: '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
@@ -189,17 +244,18 @@
     err: '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg>',
   };
   const titles = {
-    issued: ["ok", "Book issued!"], returned: ["ok", "Book returned!"],
-    already_issued: ["warn", "Book already issued"], already_returned: ["warn", "Already returned"],
-    no_record: ["warn", "No borrowing record"], error: ["err", "Something went wrong"],
+    issued: ["ok", "Book issued!"], returned: ["ok", "Book returned!"], queued: ["ok", "You're in the queue!"],
+    already_issued: ["warn", "Book already issued"], reserved: ["warn", "Book is reserved"], own_book: ["warn", "You already have this book"],
+    already_in_queue: ["warn", "Already in the queue"], available_now: ["ok", "It's available now"],
+    already_returned: ["warn", "Already returned"], no_record: ["warn", "No borrowing record"], error: ["err", "Something went wrong"],
   };
 
-  $("form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const email = currentEmail(), action = $("action").value, book_id = $("book").value;
-    if (!email || !action || !book_id) return;
+  let last = null;   // last submission, for the "Join the queue" button on the result screen
+  async function send(action, book_id) {
+    const email = currentEmail();
     showAlert("");
-    $("submit").disabled = true; $("submit").classList.add("busy");
+    const btn = action === "reserve" && $("result").style.display === "block" ? $("joinBtn") : $("submit");
+    btn.disabled = true; btn.classList.add("busy");
     try {
       const res = await fetch(C.SUPABASE_URL.replace(/\/$/, "") + "/functions/v1/library-action", {
         method: "POST",
@@ -209,25 +265,36 @@
       const out = await res.json().catch(() => ({}));
       if (out.outcome === "unknown_user") {
         memEmail = ""; store.del("lib_email"); showWho();
+        $("result").style.display = "none"; $("form").style.display = "block";
         showAlert(out.message); return;
       }
       if (!out.outcome) { showAlert(out.message || "Something went wrong. Please try again."); return; }
       memEmail = email; store.set("lib_email", email);
+      last = { book_id };
       const [kind, title] = titles[out.outcome] || ["err", "Something went wrong"];
       $("result").className = "result " + kind;
       $("resIcon").innerHTML = icons[kind];
       $("resTitle").textContent = title;
       $("resMsg").textContent = out.message || "";
-      $("resMail").textContent = out.outcome === "error" ? "" : "A confirmation email has been sent to " + email + ".";
+      $("resMail").textContent = out.email === "sent" ? "A confirmation email has been sent to " + email + "." : "";
+      $("joinBtn").style.display = out.can_queue ? "flex" : "none";
       $("form").style.display = "none"; $("result").style.display = "block";
       loadBooks();
     } catch (err) {
       console.error(err);
       showAlert("Could not reach the library system. Check your internet connection and try again.");
+      $("result").style.display = "none"; $("form").style.display = "block";
     } finally {
-      $("submit").classList.remove("busy"); validate();
+      btn.classList.remove("busy"); btn.disabled = false; validate();
     }
+  }
+
+  $("form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const plan = plannedAction();
+    if (plan && currentEmail()) send(plan, $("book").value);
   });
+  $("joinBtn").addEventListener("click", () => { if (last) send("reserve", last.book_id); });
 
   $("again").addEventListener("click", () => {
     $("action").value = ""; fillBooks(); showWho();

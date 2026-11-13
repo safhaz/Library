@@ -38,12 +38,12 @@
   /* app */
   #app{display:none}
   .top{background:var(--brand);color:#fff}
-  .top .wrap{display:flex;align-items:center;gap:14px;padding:14px 22px;max-width:1280px;margin:0 auto}
+  .top .wrap{display:flex;align-items:center;gap:14px;padding:14px 22px;max-width:1680px;margin:0 auto}
   .top h1{font-size:18px;margin:0;font-weight:650}
   .top .sp{flex:1}
   .top .who{opacity:.75;font-size:13px}
   .top .btn{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.2);color:#fff}
-  .wrap-main{max-width:1280px;margin:0 auto;padding:20px 22px 60px}
+  .wrap-main{max-width:1680px;margin:0 auto;padding:20px 22px 60px}
   .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px}
   .stat{background:#fff;border-radius:12px;padding:14px 16px;border:1px solid var(--line)}
   .stat .k{font-size:12.5px;color:var(--muted);font-weight:550}
@@ -60,6 +60,7 @@
   table{width:100%;border-collapse:collapse}
   th{position:sticky;top:0;background:#f7f8f5;text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap;z-index:1}
   td{padding:10px 12px;border-bottom:1px solid #f0f2ee;vertical-align:top}
+  td:nth-child(2){min-width:190px}
   tr:hover td{background:#fafbf9}
   td.nowrap{white-space:nowrap}
   .sub{font-size:12.5px;color:var(--muted)}
@@ -130,6 +131,7 @@
       <button class="tab" role="tab" data-tab="people">Employees<span class="c" id="c-people"></span></button>
       <button class="tab" role="tab" data-tab="emails">Emails<span class="c" id="c-emails"></span></button>
       <button class="tab" role="tab" data-tab="upload">Upload Excel</button>
+      <button class="tab" role="tab" data-tab="settings">Settings</button>
       <button class="tab" role="tab" data-tab="qr">QR code</button>
     </div>
 
@@ -188,7 +190,7 @@
   sb.auth.getSession().then(({ data }) => { if (data.session) enter(data.session); });
 
   // ---------------- data ----------------
-  const S = { books: [], members: [], tx: [], activity: [], emails: [], tab: "report", q: "", filter: "all", showAllStaff: false, from: "", to: "", upload: null };
+  const S = { books: [], members: [], tx: [], activity: [], emails: [], reservations: [], settings: {}, tab: "report", q: "", filter: "all", showAllStaff: false, from: "", to: "", upload: null };
   const memberBy = () => new Map(S.members.map(m => [m.email, m]));
   const bookBy = () => new Map(S.books.map(b => [b.book_id, b]));
 
@@ -205,11 +207,13 @@
   async function loadAll() {
     $("view").innerHTML = '<div class="panel"><div class="empty">Loading…</div></div>';
     try {
-      const [books, members, tx, activity, emails] = await Promise.all([
+      const [books, members, tx, activity, emails, reservations, settings] = await Promise.all([
         fetchAll("books", "title", true), fetchAll("members", "name", true), fetchAll("transactions", "issue_date"),
         fetchAll("activity_log", "created_at"), fetchAll("email_log", "created_at"),
+        fetchAll("reservations", "created_at", true), fetchAll("settings", "key", true),
       ]);
-      Object.assign(S, { books, members, tx, activity, emails });
+      Object.assign(S, { books, members, tx, activity, emails, reservations,
+        settings: Object.fromEntries(settings.map(r => [r.key, r.value])) });
       renderStats(); render();
     } catch (e) {
       console.error(e);
@@ -219,6 +223,17 @@
   $("refresh").addEventListener("click", loadAll);
 
   const isOpen = (t) => !t.return_date;
+  const isActiveRes = (r) => r.status === "waiting" || r.status === "notified";
+  // Calls the library-action server function as the signed-in admin
+  async function adminCall(body) {
+    const { data } = await sb.auth.getSession();
+    const res = await fetch(C.SUPABASE_URL.replace(/\/$/, "") + "/functions/v1/library-action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: C.SUPABASE_ANON_KEY, Authorization: "Bearer " + (data.session?.access_token || "") },
+      body: JSON.stringify(body),
+    });
+    return res.json().catch(() => ({ ok: false, message: "No response from server" }));
+  }
   const isOverdue = (t) => isOpen(t) && new Date(t.due_date) < new Date();
 
   function renderStats() {
@@ -227,11 +242,12 @@
     const month = Date.now() - 30 * 864e5;
     const acts = S.activity.filter(a => new Date(a.created_at) > month).length;
     const tiles = [
-      ["Books", S.books.filter(b => b.active).length], ["Available", S.books.filter(b => b.active).length - open.length],
-      ["Issued now", open.length], ["Overdue", overdue.length, overdue.length > 0], ["Borrowers", borrowers], ["Actions (30 days)", acts],
+      ["Books", S.books.filter(b => b.active).length], ["Available", S.books.filter(b => b.active && !open.some(t => t.book_id === b.book_id) && !S.reservations.some(r => r.book_id === b.book_id && isActiveRes(r))).length],
+      ["Issued now", open.length], ["Overdue", overdue.length, overdue.length > 0],
+      ["In queue", S.reservations.filter(isActiveRes).length], ["Borrowers", borrowers], ["Actions (30 days)", acts],
     ];
     $("stats").innerHTML = tiles.map(([k, v, a]) => `<div class="stat ${a ? "alert" : ""}"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
-    $("c-activity").textContent = S.activity.length; $("c-report").textContent = S.tx.length; $("c-books").textContent = S.books.length;
+    $("c-activity").textContent = S.activity.length; $("c-report").textContent = S.tx.length + S.reservations.length; $("c-books").textContent = S.books.length;
     $("c-people").textContent = S.members.filter(m => m.active).length; $("c-emails").textContent = S.emails.length;
   }
 
@@ -245,6 +261,9 @@
     issued: ["ok", "Issued"], returned: ["ok", "Returned"], already_issued: ["warn", "Already issued"],
     already_returned: ["warn", "Already returned"], no_record: ["warn", "No record"], unknown_user: ["err", "Unknown email"],
     error: ["err", "Error"], admin_return: ["info", "Returned by admin"],
+    queued: ["info", "Joined queue"], already_in_queue: ["mute", "Already in queue"], reserved: ["warn", "Reserved for queue"],
+    own_book: ["mute", "Already has it"], available_now: ["mute", "Was available"], queue_notified: ["info", "Book held for them"],
+    hold_expired: ["warn", "Hold expired"], admin_cancel: ["info", "Removed from queue"], admin_days: ["info", "Loan period changed"],
   };
   const chip = (cls, t) => `<span class="chip ${cls}">${esc(t)}</span>`;
   const match = (row) => !S.q || JSON.stringify(row).toLowerCase().includes(S.q.toLowerCase());
@@ -268,7 +287,7 @@
 
   function render(keepFocus) {
     const pos = keepFocus && $("q") ? $("q").selectionStart : null;
-    ({ report: viewReport, activity: viewActivity, books: viewBooks, people: viewPeople, emails: viewEmails, upload: viewUpload, qr: viewQr })[S.tab]();
+    ({ report: viewReport, activity: viewActivity, books: viewBooks, people: viewPeople, emails: viewEmails, upload: viewUpload, settings: viewSettings, qr: viewQr })[S.tab]();
     if (pos !== null && $("q")) { $("q").focus(); $("q").setSelectionRange(pos, pos); }
   }
 
@@ -299,61 +318,142 @@
 
   function viewReport() {
     const mb = memberBy(), bb = bookBy();
-    let rows = S.tx.map(t => { const m = mb.get(t.user_email) || {}; return { ...t, uid: m.user_id || "", name: m.name || "", dept: m.department || "", title: bb.get(t.book_id)?.title || t.book_id }; });
-    if (S.filter === "open") rows = rows.filter(isOpen);
-    if (S.filter === "overdue") rows = rows.filter(isOverdue);
-    if (S.filter === "returned") rows = rows.filter(t => !isOpen(t));
-    if (S.from) rows = rows.filter(t => xd(t.issue_date).slice(0, 10) >= S.from);
-    if (S.to) rows = rows.filter(t => xd(t.issue_date).slice(0, 10) <= S.to);
-    rows = rows.filter(match);
-    const state = (t) => isOverdue(t) ? chip("err", "Overdue") : isOpen(t) ? chip("info", "Issued") : t.status === "Returned" ? chip("ok", "Returned") : chip("mute", t.status);
-    $("view").innerHTML = toolbar([["all", "All transactions"], ["open", "Still out"], ["overdue", "Overdue"], ["returned", "Returned"]],
-        `<label class="sub">Issued from <input type="date" id="from" value="${esc(S.from)}"></label>
+    const who = (e) => mb.get(e) || {};
+    const waitingFor = (bookId) => S.reservations.filter(r => r.book_id === bookId && isActiveRes(r)).length;
+    // Place in queue for each active reservation
+    const pos = new Map();
+    const byBook = {};
+    S.reservations.filter(isActiveRes).sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id)
+      .forEach(r => { byBook[r.book_id] = (byBook[r.book_id] || 0) + 1; pos.set(r.id, byBook[r.book_id]); });
+
+    const loanRows = S.tx.map(t => { const m = who(t.user_email), bk = bb.get(t.book_id) || {};
+      return { kind: "loan", raw: t, key: "T-" + t.id, id: String(t.id), book_id: t.book_id, title: bk.title || t.book_id, theme: bk.theme || "",
+        uid: m.user_id || "", name: m.name || "", email: t.user_email, dept: m.department || "",
+        action: t.return_date ? "Return a Book" : "Issue a Book", when: t.return_date || t.issue_date,
+        issue: t.issue_date, days: t.loan_days, due: t.due_date, ret: t.return_date,
+        queue: isOpen(t) ? waitingFor(t.book_id) : "", status: txStatus(t), sort: t.issue_date }; });
+    const resStatus = (r) => r.status === "waiting" ? `Waiting (#${pos.get(r.id)} in queue)`
+      : r.status === "notified" ? `Held until ${xd(r.hold_until)}` : r.status === "fulfilled" ? "Collected" : r.status === "expired" ? "Hold expired" : "Cancelled";
+    const resRows = S.reservations.map(r => { const m = who(r.user_email), bk = bb.get(r.book_id) || {};
+      const out = S.tx.find(t => t.book_id === r.book_id && isOpen(t));
+      return { kind: "queue", raw: r, key: "Q-" + r.id, id: "Q-" + r.id, book_id: r.book_id, title: bk.title || r.book_id, theme: bk.theme || "",
+        uid: m.user_id || "", name: m.name || "", email: r.user_email, dept: m.department || "",
+        action: "Join Queue", when: r.created_at, issue: null, days: "", due: isActiveRes(r) && out ? out.due_date : null, ret: null,
+        queue: isActiveRes(r) ? "#" + pos.get(r.id) : "", status: resStatus(r), sort: r.created_at }; });
+
+    let rows = [...loanRows, ...resRows];
+    if (S.filter === "loans") rows = rows.filter(r => r.kind === "loan");
+    if (S.filter === "open") rows = rows.filter(r => r.kind === "loan" && isOpen(r.raw));
+    if (S.filter === "overdue") rows = rows.filter(r => r.kind === "loan" && isOverdue(r.raw));
+    if (S.filter === "returned") rows = rows.filter(r => r.kind === "loan" && !isOpen(r.raw));
+    if (S.filter === "queue") rows = rows.filter(r => r.kind === "queue" && isActiveRes(r.raw));
+    if (S.filter === "queue_all") rows = rows.filter(r => r.kind === "queue");
+    if (S.from) rows = rows.filter(r => xd(r.sort).slice(0, 10) >= S.from);
+    if (S.to) rows = rows.filter(r => xd(r.sort).slice(0, 10) <= S.to);
+    rows = rows.filter(r => match({ ...r, raw: undefined })).sort((a, b) => b.sort.localeCompare(a.sort));
+
+    const chipFor = (r) => {
+      if (r.kind === "queue") return r.raw.status === "waiting" ? chip("info", r.status) : r.raw.status === "notified" ? chip("warn", r.status)
+        : r.raw.status === "fulfilled" ? chip("ok", r.status) : chip("mute", r.status);
+      const t = r.raw; return isOverdue(t) ? chip("err", "Overdue") : isOpen(t) ? chip("info", "Issued") : t.status === "Returned" ? chip("ok", "Returned") : chip("mute", t.status);
+    };
+    const buttons = (r) => r.kind === "loan"
+      ? (isOpen(r.raw) ? `<button class="btn small" data-days="${r.raw.id}">Change days</button> <button class="btn small" data-return="${r.raw.id}">Mark returned</button>` : "")
+      : (isActiveRes(r.raw) ? `<button class="btn small" data-cancel="${r.raw.id}">Remove</button>` : "");
+
+    $("view").innerHTML = toolbar([["all", "Everything"], ["loans", "Loans only"], ["open", "Still out"], ["overdue", "Overdue"], ["returned", "Returned"],
+        ["queue", "Queue – waiting now"], ["queue_all", "Queue – all requests"]],
+        `<label class="sub">From <input type="date" id="from" value="${esc(S.from)}"></label>
          <label class="sub">to <input type="date" id="to" value="${esc(S.to)}"></label>`) + table(
-      ["Transaction ID", "Book", "User", "Department", "Action", "DateTime", "Issue Date", "Due Date", "Return Date", "TransactionStatus", ""],
-      rows.map(t => `<tr><td>${t.id}</td>
-        <td>${esc(t.title)}<div class="sub">${esc(t.book_id)}</div></td>
-        <td>${esc(t.name || "—")}<div class="sub">${esc(t.user_email)}${t.uid ? " · " + esc(t.uid) : ""}</div></td>
-        <td class="sub">${esc(t.dept)}</td>
-        <td class="nowrap">${t.return_date ? "Return a Book" : "Issue a Book"}</td>
-        <td class="nowrap">${xd(t.return_date || t.issue_date)}</td>
-        <td class="nowrap">${xd(t.issue_date)}</td><td class="nowrap">${xd(t.due_date).slice(0, 10)}</td>
-        <td class="nowrap">${xd(t.return_date)}</td><td>${state(t)}</td>
-        <td>${isOpen(t) ? `<button class="btn small" data-return="${t.id}">Mark returned</button>` : ""}</td></tr>`),
+      ["Transaction ID", "Book", "User", "Action", "DateTime", "Issue Date", "Loan Days", "Due Date", "Return Date", "Queue", "TransactionStatus", ""],
+      rows.map(r => `<tr><td class="nowrap">${esc(r.id)}</td>
+        <td>${esc(r.title)}<div class="sub">${esc(r.book_id)}${r.theme ? " · " + esc(r.theme) : ""}</div></td>
+        <td>${esc(r.name || "—")}<div class="sub">${esc(r.email)}${r.dept ? " · " + esc(r.dept) : ""}</div></td>
+        <td class="nowrap">${esc(r.action)}</td>
+        <td class="nowrap">${xd(r.when)}</td><td class="nowrap">${xd(r.issue)}</td>
+        <td>${r.days === "" ? "" : esc(r.days)}</td>
+        <td class="nowrap">${r.due ? (r.kind === "queue" ? '<span class="sub">back ~</span>' : "") + xd(r.due).slice(0, 10) : ""}</td>
+        <td class="nowrap">${xd(r.ret)}</td>
+        <td>${r.queue === 0 ? "" : esc(r.queue)}</td>
+        <td>${chipFor(r)}</td>
+        <td class="nowrap">${buttons(r)}</td></tr>`),
       "No transactions yet. They appear here as soon as someone issues a book.");
-    wireToolbar(() => rows.map(t => ({
-      "Transaction ID": t.id, "Book ID": t.book_id, "Book": t.title, "User ID": t.uid, "User Name": t.name,
-      "User Email": t.user_email, "Department": t.dept, "Action": t.return_date ? "Return a Book" : "Issue a Book",
-      "DateTime": xd(t.return_date || t.issue_date), "Issue Date": xd(t.issue_date), "Due Date": xd(t.due_date).slice(0, 10),
-      "Return Date": xd(t.return_date), "TransactionStatus": txStatus(t) })));
+    wireToolbar(() => rows.map(r => ({
+      "Transaction ID": r.id, "Book ID": r.book_id, "Book": r.title, "Topic": r.theme, "User ID": r.uid, "User Name": r.name,
+      "User Email": r.email, "Department": r.dept, "Action": r.action, "DateTime": xd(r.when), "Issue Date": xd(r.issue),
+      "Loan Days": r.days, "Due Date": r.due ? xd(r.due).slice(0, 10) : "", "Return Date": xd(r.ret),
+      "Queue": r.queue === 0 ? "" : r.queue, "TransactionStatus": r.status })));
     $("csv").textContent = "Download CSV";
     $("from").addEventListener("change", (e) => { S.from = e.target.value; render(); });
     $("to").addEventListener("change", (e) => { S.to = e.target.value; render(); });
     document.querySelectorAll("[data-return]").forEach(b => b.addEventListener("click", () => adminReturn(+b.dataset.return)));
+    document.querySelectorAll("[data-days]").forEach(b => b.addEventListener("click", () => openDaysModal(+b.dataset.days)));
+    document.querySelectorAll("[data-cancel]").forEach(b => b.addEventListener("click", () => adminCancel(+b.dataset.cancel)));
   }
 
   async function adminReturn(id) {
     const t = S.tx.find(x => x.id === id); if (!t) return;
     const b = bookBy().get(t.book_id), m = memberBy().get(t.user_email);
-    if (!confirm(`Mark '${b?.title || t.book_id}' as returned by ${m?.name || t.user_email}? (No email is sent.)`)) return;
-    const { error } = await sb.from("transactions").update({ return_date: new Date().toISOString(), status: "Returned" }).eq("id", id);
-    if (error) return toast("Failed: " + error.message);
-    await sb.from("activity_log").insert({ email: t.user_email, name: m?.name || null, action: "return", book_id: t.book_id, book_title: b?.title || null, outcome: "admin_return", message: "Marked returned by admin " + $("who").textContent, transaction_id: id });
-    toast("Marked as returned"); loadAll();
+    if (!confirm(`Mark '${b?.title || t.book_id}' as returned by ${m?.name || t.user_email}? (No email is sent to them. If someone is in the queue, they are emailed that it's available.)`)) return;
+    const out = await adminCall({ action: "admin_return", transaction_id: id });
+    if (!out.ok) return toast("Failed: " + (out.message || "unknown error"));
+    toast(out.queue_notified ? "Returned – next in queue emailed: " + out.queue_notified : "Marked as returned"); loadAll();
+  }
+
+  async function adminCancel(id) {
+    const r = S.reservations.find(x => x.id === id); if (!r) return;
+    const b = bookBy().get(r.book_id), m = memberBy().get(r.user_email);
+    if (!confirm(`Remove ${m?.name || r.user_email} from the queue for '${b?.title || r.book_id}'?`)) return;
+    const out = await adminCall({ action: "admin_cancel", reservation_id: id });
+    if (!out.ok) return toast("Failed: " + (out.message || "unknown error"));
+    toast(out.queue_notified ? "Removed – next in queue emailed: " + out.queue_notified : "Removed from queue"); loadAll();
+  }
+
+  function openDaysModal(id) {
+    const t = S.tx.find(x => x.id === id); if (!t) return;
+    const b = bookBy().get(t.book_id), m = memberBy().get(t.user_email);
+    const issued = new Date(t.issue_date);
+    const dueFor = (d) => new Date(issued.getTime() + d * 864e5).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+    $("modalBox").innerHTML = `<div style="text-align:left">
+      <h3 style="margin:0 0 4px">Loan period</h3>
+      <div class="sub" style="margin-bottom:14px">${esc(b?.title || t.book_id)} · ${esc(m?.name || t.user_email)}<br>Issued ${esc(fmt(t.issue_date, false))}</div>
+      <label style="font-weight:600">Number of days</label>
+      <div style="display:flex;gap:8px;align-items:center;margin:6px 0 4px">
+        <input type="number" id="daysIn" min="1" max="365" value="${t.loan_days || 15}" style="width:110px;padding:9px 12px;border:1.5px solid var(--line);border-radius:9px">
+        <span class="sub">days</span></div>
+      <div class="toolbar" style="margin:8px 0">${[7, 15, 21, 30].map(d => `<button class="btn small" data-preset="${d}">${d} days</button>`).join("")}</div>
+      <div class="sub" id="dueOut" style="font-size:14px;margin:6px 0 14px"></div>
+      <div class="sub" style="margin-bottom:14px">Reminders follow the new date: halfway, the day before, then every 2nd day if overdue.</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" id="cancelDays">Cancel</button><button class="btn primary" id="saveDays">Save</button></div></div>`;
+    const upd = () => { const d = +$("daysIn").value; $("dueOut").innerHTML = d >= 1 && d <= 365 ? `New return date: <b>${esc(dueFor(d))}</b>` : "Enter 1–365 days"; };
+    $("daysIn").addEventListener("input", upd); upd();
+    document.querySelectorAll("[data-preset]").forEach(x => x.addEventListener("click", () => { $("daysIn").value = x.dataset.preset; upd(); }));
+    $("cancelDays").addEventListener("click", () => $("modal").classList.remove("open"));
+    $("saveDays").addEventListener("click", async () => {
+      const d = +$("daysIn").value; if (!(d >= 1 && d <= 365)) return;
+      $("saveDays").disabled = true;
+      const out = await adminCall({ action: "admin_days", transaction_id: id, days: d });
+      if (!out.ok) { $("saveDays").disabled = false; return toast("Failed: " + (out.message || "unknown error")); }
+      $("modal").classList.remove("open"); toast(`Loan period set to ${d} days`); loadAll();
+    });
+    $("modal").classList.add("open");
   }
 
   // Books
   function viewBooks() {
     const mb = memberBy();
     const openBy = new Map(S.tx.filter(isOpen).map(t => [t.book_id, t]));
-    let rows = S.books.map(b => { const t = openBy.get(b.book_id); return { ...b, loan: t, holder: t ? (mb.get(t.user_email)?.name || t.user_email) : "", times: S.tx.filter(x => x.book_id === b.book_id && x.status !== "Closed on import").length }; });
-    if (S.filter === "available") rows = rows.filter(b => !b.loan && b.active);
+    let rows = S.books.map(b => { const t = openBy.get(b.book_id); return { ...b, loan: t, holder: t ? (mb.get(t.user_email)?.name || t.user_email) : "", times: S.tx.filter(x => x.book_id === b.book_id && x.status !== "Closed on import").length,
+      queue: S.reservations.filter(r => r.book_id === b.book_id && isActiveRes(r)).length,
+      held: S.reservations.some(r => r.book_id === b.book_id && r.status === "notified") }; });
+    if (S.filter === "available") rows = rows.filter(b => !b.loan && b.active && !b.queue);
+    if (S.filter === "queue") rows = rows.filter(b => b.queue);
     if (S.filter === "out") rows = rows.filter(b => b.loan);
     if (S.filter === "overdue") rows = rows.filter(b => b.loan && isOverdue(b.loan));
     if (S.filter === "hidden") rows = rows.filter(b => !b.active);
     rows = rows.filter(match);
     const themes = [...new Set(S.books.map(b => b.theme).filter(Boolean))].sort();
-    $("view").innerHTML = toolbar([["all", "All books"], ["available", "Available"], ["out", "Issued"], ["overdue", "Overdue"], ["hidden", "Hidden"]], `<button class="btn" id="addToggle">+ Add book</button>`) +
+    $("view").innerHTML = toolbar([["all", "All books"], ["available", "Available"], ["out", "Issued"], ["overdue", "Overdue"], ["queue", "Has a queue"], ["hidden", "Hidden"]], `<button class="btn" id="addToggle">+ Add book</button>`) +
       `<form class="add" id="addForm"><div class="grid">
         <input type="text" name="book_id" placeholder="Book ID (e.g. SFL-LP-029)" required>
         <input type="text" name="title" placeholder="Title" required>
@@ -361,14 +461,14 @@
         <input type="text" name="theme" placeholder="Theme" list="themes">
         <datalist id="themes">${themes.map(t => `<option value="${esc(t)}">`).join("")}</datalist>
       </div><button class="btn primary" type="submit">Save book</button></form>` +
-      table(["Book", "Theme", "Status", "With", "Due", "Times borrowed", ""],
+      table(["Book", "Theme", "Status", "With", "Due", "In queue", "Times borrowed", ""],
         rows.map(b => `<tr><td>${esc(b.title)}<div class="sub">${esc(b.book_id)} · ${esc((b.author || "").trim())}</div></td>
           <td class="sub">${esc(b.theme)}</td>
-          <td>${!b.active ? chip("mute", "Hidden") : b.loan ? (isOverdue(b.loan) ? chip("err", "Overdue") : chip("info", "Issued")) : chip("ok", "Available")}</td>
-          <td>${esc(b.holder)}</td><td class="nowrap">${b.loan ? fmt(b.loan.due_date, false) : ""}</td><td>${b.times}</td>
+          <td>${!b.active ? chip("mute", "Hidden") : b.loan ? (isOverdue(b.loan) ? chip("err", "Overdue") : chip("info", "Issued")) : b.held ? chip("warn", "Held for queue") : chip("ok", "Available")}</td>
+          <td>${esc(b.holder)}</td><td class="nowrap">${b.loan ? fmt(b.loan.due_date, false) : ""}</td><td>${b.queue || ""}</td><td>${b.times}</td>
           <td class="nowrap"><button class="btn small" data-qr="${esc(b.book_id)}">QR</button>
             <button class="btn small" data-hide="${esc(b.book_id)}" data-active="${b.active}">${b.active ? "Hide" : "Show"}</button></td></tr>`));
-    wireToolbar(() => rows.map(b => ({ "Book ID": b.book_id, Title: b.title, Author: (b.author || "").trim(), Theme: b.theme, Status: !b.active ? "Hidden" : b.loan ? (isOverdue(b.loan) ? "Overdue" : "Issued") : "Available", With: b.holder, Due: b.loan ? fmt(b.loan.due_date, false) : "", "Times borrowed": b.times })));
+    wireToolbar(() => rows.map(b => ({ "Book ID": b.book_id, Title: b.title, Author: (b.author || "").trim(), Theme: b.theme, Status: !b.active ? "Hidden" : b.loan ? (isOverdue(b.loan) ? "Overdue" : "Issued") : b.held ? "Held for queue" : "Available", With: b.holder, Due: b.loan ? fmt(b.loan.due_date, false) : "", "In queue": b.queue, "Times borrowed": b.times })));
     $("addToggle").addEventListener("click", () => $("addForm").classList.toggle("open"));
     $("addForm").addEventListener("submit", async (e) => {
       e.preventDefault(); const f = Object.fromEntries(new FormData(e.target)); Object.keys(f).forEach(k => f[k] = f[k].trim());
@@ -591,16 +691,40 @@
     }
   }
 
+  // Settings
+  function viewSettings() {
+    const v = (k, d) => S.settings[k] ?? d;
+    $("view").innerHTML = `<div class="panel" style="padding:20px;max-width:620px">
+      <h3 style="margin:0 0 14px">Loan settings</h3>
+      <label style="font-weight:600;display:block">Default loan period</label>
+      <div class="sub" style="margin:2px 0 6px">Used for every new loan. You can still change any single loan in the Report tab (<b>Change days</b>).</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:18px"><input type="number" id="setLoan" min="1" max="365" value="${esc(v("default_loan_days", 15))}" style="width:110px;padding:9px 12px;border:1.5px solid var(--line);border-radius:9px"><span class="sub">days</span></div>
+      <label style="font-weight:600;display:block">Queue hold time</label>
+      <div class="sub" style="margin:2px 0 6px">When a book comes back and someone is waiting, it is held for them this long. If they don't issue it in time, it passes to the next person.</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:18px"><input type="number" id="setHold" min="1" max="30" value="${esc(v("hold_days", 3))}" style="width:110px;padding:9px 12px;border:1.5px solid var(--line);border-radius:9px"><span class="sub">days</span></div>
+      <div class="sub" style="margin-bottom:16px;padding:10px 12px;background:#f7f8f5;border-radius:9px">Reminder emails for each loan: <b>halfway</b> through the period, <b>the day before</b> the return date, and <b>every 2nd day</b> once it's overdue.</div>
+      <button class="btn primary" id="saveSettings">Save settings</button></div>`;
+    $("saveSettings").addEventListener("click", async () => {
+      const loan = Math.round(+$("setLoan").value), hold = Math.round(+$("setHold").value);
+      if (!(loan >= 1 && loan <= 365) || !(hold >= 1 && hold <= 30)) return toast("Loan period 1–365 days, hold time 1–30 days");
+      const { error } = await sb.from("settings").upsert([
+        { key: "default_loan_days", value: String(loan), updated_at: new Date().toISOString() },
+        { key: "hold_days", value: String(hold), updated_at: new Date().toISOString() }], { onConflict: "key" });
+      if (error) return toast("Failed: " + error.message);
+      toast("Settings saved"); loadAll();
+    });
+  }
+
   // Emails
   function viewEmails() {
     let rows = S.emails;
     if (S.filter !== "all") rows = rows.filter(e => e.status === S.filter);
     rows = rows.filter(match);
-    $("view").innerHTML = toolbar([["all", "All emails"], ["sent", "Sent"], ["failed", "Failed"]]) + table(
+    $("view").innerHTML = toolbar([["all", "All emails"], ["sent", "Sent"], ["failed", "Failed"], ["skipped", "Not sent (emails off)"]]) + table(
       ["When", "To", "Subject", "Type", "Status"],
       rows.map(e => `<tr><td class="nowrap">${fmt(e.created_at)}</td><td>${esc(e.to_email)}</td><td>${esc(e.subject)}</td>
         <td class="sub">${esc(String(e.kind).replace(/_/g, " "))}</td>
-        <td>${e.status === "sent" ? chip("ok", "Sent") : chip("err", "Failed")}${e.error ? `<div class="sub">${esc(e.error)}</div>` : ""}</td></tr>`), "No emails yet.");
+        <td>${e.status === "sent" ? chip("ok", "Sent") : e.status === "skipped" ? chip("mute", "Not sent (emails off)") : chip("err", "Failed")}${e.error ? `<div class="sub">${esc(e.error)}</div>` : ""}</td></tr>`), "No emails yet.");
     wireToolbar(() => rows.map(e => ({ When: fmt(e.created_at), To: e.to_email, Subject: e.subject, Type: e.kind, Status: e.status, Error: e.error || "" })));
   }
 
