@@ -81,6 +81,14 @@
   .qr-box svg,.qr-box img{width:100%;height:auto;max-width:300px}
   .qr-box .cap{font-weight:650;margin-top:8px}
   .url{word-break:break-all;background:#f7f8f5;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+  .thumb{width:38px;height:56px;border-radius:3px 5px 5px 3px;border:1px dashed #c9d0c7;background:#f7f8f5;padding:0;overflow:hidden;cursor:pointer;display:grid;place-items:center;color:var(--muted);font-size:18px}
+  .thumb img{width:100%;height:100%;object-fit:cover}
+  .cands{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:12px;margin:12px 0;max-height:46vh;overflow:auto;text-align:left}
+  .cand{border:2px solid transparent;border-radius:8px;padding:4px;background:#fff;cursor:pointer;font-size:11.5px;color:var(--muted)}
+  .cand img{width:100%;aspect-ratio:2/3;object-fit:cover;border-radius:4px;background:#eee;margin-bottom:4px}
+  .cand:hover{border-color:#c9d0c7}
+  .cand.sel{border-color:var(--brand)}
+  .modal .box.wide{max-width:640px}
   .drop{display:block;border:2px dashed #c9d0c7;border-radius:12px;padding:28px;text-align:center;cursor:pointer;background:#fafbf8}
   .drop.over,.drop:hover{border-color:var(--brand-2);background:#eef4f0}
   .upcard{border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:12px}
@@ -448,12 +456,14 @@
       held: S.reservations.some(r => r.book_id === b.book_id && r.status === "notified") }; });
     if (S.filter === "available") rows = rows.filter(b => !b.loan && b.active && !b.queue);
     if (S.filter === "queue") rows = rows.filter(b => b.queue);
+    if (S.filter === "nocover") rows = rows.filter(b => !b.cover_url);
     if (S.filter === "out") rows = rows.filter(b => b.loan);
     if (S.filter === "overdue") rows = rows.filter(b => b.loan && isOverdue(b.loan));
     if (S.filter === "hidden") rows = rows.filter(b => !b.active);
     rows = rows.filter(match);
     const themes = [...new Set(S.books.map(b => b.theme).filter(Boolean))].sort();
-    $("view").innerHTML = toolbar([["all", "All books"], ["available", "Available"], ["out", "Issued"], ["overdue", "Overdue"], ["queue", "Has a queue"], ["hidden", "Hidden"]], `<button class="btn" id="addToggle">+ Add book</button>`) +
+    $("view").innerHTML = toolbar([["all", "All books"], ["available", "Available"], ["out", "Issued"], ["overdue", "Overdue"], ["queue", "Has a queue"], ["nocover", "No cover yet"], ["hidden", "Hidden"]], `<button class="btn" id="findCovers">Find covers</button> <button class="btn" id="addToggle">+ Add book</button>`) +
+      `<div class="sub" id="coverProgress" style="margin:-4px 0 10px"></div>` +
       `<form class="add" id="addForm"><div class="grid">
         <input type="text" name="book_id" placeholder="Book ID (e.g. SFL-LP-029)" required>
         <input type="text" name="title" placeholder="Title" required>
@@ -461,12 +471,13 @@
         <input type="text" name="theme" placeholder="Theme" list="themes">
         <datalist id="themes">${themes.map(t => `<option value="${esc(t)}">`).join("")}</datalist>
       </div><button class="btn primary" type="submit">Save book</button></form>` +
-      table(["Book", "Theme", "Status", "With", "Due", "In queue", "Times borrowed", ""],
-        rows.map(b => `<tr><td>${esc(b.title)}<div class="sub">${esc(b.book_id)} · ${esc((b.author || "").trim())}</div></td>
+      table(["Cover", "Book", "Theme", "Status", "With", "Due", "In queue", "Times borrowed", ""],
+        rows.map(b => `<tr><td><button class="thumb" data-cover="${esc(b.book_id)}" title="Change cover">${b.cover_url ? `<img src="${esc(b.cover_url)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : "<span>+</span>"}</button></td>
+          <td>${esc(b.title)}<div class="sub">${esc(b.book_id)} · ${esc((b.author || "").trim())}</div></td>
           <td class="sub">${esc(b.theme)}</td>
           <td>${!b.active ? chip("mute", "Hidden") : b.loan ? (isOverdue(b.loan) ? chip("err", "Overdue") : chip("info", "Issued")) : b.held ? chip("warn", "Held for queue") : chip("ok", "Available")}</td>
           <td>${esc(b.holder)}</td><td class="nowrap">${b.loan ? fmt(b.loan.due_date, false) : ""}</td><td>${b.queue || ""}</td><td>${b.times}</td>
-          <td class="nowrap"><button class="btn small" data-qr="${esc(b.book_id)}">QR</button>
+          <td class="nowrap"><button class="btn small" data-cover="${esc(b.book_id)}">Cover</button> <button class="btn small" data-qr="${esc(b.book_id)}">QR</button>
             <button class="btn small" data-hide="${esc(b.book_id)}" data-active="${b.active}">${b.active ? "Hide" : "Show"}</button></td></tr>`));
     wireToolbar(() => rows.map(b => ({ "Book ID": b.book_id, Title: b.title, Author: (b.author || "").trim(), Theme: b.theme, Status: !b.active ? "Hidden" : b.loan ? (isOverdue(b.loan) ? "Overdue" : "Issued") : b.held ? "Held for queue" : "Available", With: b.holder, Due: b.loan ? fmt(b.loan.due_date, false) : "", "In queue": b.queue, "Times borrowed": b.times })));
     $("addToggle").addEventListener("click", () => $("addForm").classList.toggle("open"));
@@ -476,6 +487,8 @@
       if (error) return toast(error.code === "23505" ? "That Book ID already exists" : "Failed: " + error.message);
       toast("Book added"); loadAll();
     });
+    document.querySelectorAll("[data-cover]").forEach(x => x.addEventListener("click", () => openCoverModal(x.dataset.cover)));
+    $("findCovers").addEventListener("click", findAllCovers);
     document.querySelectorAll("[data-qr]").forEach(b => b.addEventListener("click", () => {
       const book = S.books.find(x => x.book_id === b.dataset.qr);
       openQrModal(scanUrl() + "?book=" + encodeURIComponent(book.book_id), book.title, book.book_id);
@@ -689,6 +702,99 @@
     } catch (e) {
       console.error(e); status("Failed: " + (e.message || e)); btn.disabled = false;
     }
+  }
+
+  // ---------------- Book covers ----------------
+  // Looks the book up on Google Books and Open Library (free, no key needed).
+  const stripHtml = (t) => String(t || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  async function searchCovers(b) {
+    const out = [];
+    const title = String(b.title || "").replace(/\(copy \d+\)/i, "").trim();
+    const author = String(b.author || "").split(/[,&;]| and /)[0].trim();
+    const google = async (q) => {
+      try {
+        const r = await fetch("https://www.googleapis.com/books/v1/volumes?maxResults=8&printType=books&q=" + encodeURIComponent(q));
+        const j = await r.json();
+        for (const it of j.items || []) {
+          const v = it.volumeInfo || {}, im = v.imageLinks || {};
+          const url = im.thumbnail || im.smallThumbnail; if (!url) continue;
+          out.push({ url: url.replace(/^http:/, "https:").replace("&edge=curl", ""), title: v.title || "", by: (v.authors || []).join(", "),
+                     desc: stripHtml(v.description).slice(0, 1500), src: "Google Books" });
+        }
+      } catch (e) { console.warn("Google Books", e); }
+    };
+    await google(`intitle:${title}` + (author ? ` inauthor:${author}` : ""));
+    if (!out.length) await google(title);
+    try {
+      const r = await fetch("https://openlibrary.org/search.json?limit=6&fields=title,author_name,cover_i&title=" + encodeURIComponent(title) + (author ? "&author=" + encodeURIComponent(author) : ""));
+      const j = await r.json();
+      for (const d of j.docs || []) if (d.cover_i) out.push({ url: `https://covers.openlibrary.org/b/id/${d.cover_i}-L.jpg`, title: d.title || "", by: (d.author_name || []).join(", "), desc: "", src: "Open Library" });
+    } catch (e) { console.warn("Open Library", e); }
+    const seen = new Set();
+    return out.filter(c => !seen.has(c.url) && seen.add(c.url));
+  }
+
+  async function findAllCovers() {
+    const todo = S.books.filter(b => !b.cover_url);
+    if (!todo.length) return toast("Every book already has a cover. Use the Cover button to change one.");
+    if (!confirm(`Look up covers for ${todo.length} book(s) without one? This takes about ${Math.ceil(todo.length / 2)} seconds. Keep this page open.`)) return;
+    const btn = $("findCovers"); btn.disabled = true;
+    let found = 0, missing = 0;
+    for (let i = 0; i < todo.length; i++) {
+      const b = todo[i];
+      if ($("coverProgress")) $("coverProgress").textContent = `Finding covers… ${i + 1}/${todo.length} – ${b.title}`;
+      const c = (await searchCovers(b))[0];
+      if (c) {
+        const upd = { cover_url: c.url };
+        if (!b.description && c.desc) upd.description = c.desc;
+        const { error } = await sb.from("books").update(upd).eq("book_id", b.book_id);
+        if (!error) { found++; Object.assign(b, upd); } else missing++;
+      } else missing++;
+      await new Promise(r => setTimeout(r, 300));
+    }
+    btn.disabled = false;
+    toast(`Covers found for ${found} book(s)` + (missing ? `, ${missing} not found – those show a designed cover. Use “Cover” to add one by hand.` : ""));
+    loadAll();
+  }
+
+  async function openCoverModal(id) {
+    const b = S.books.find(x => x.book_id === id); if (!b) return;
+    let chosen = null;
+    $("modalBox").classList.add("wide");
+    $("modalBox").innerHTML = `<div style="text-align:left">
+      <h3 style="margin:0 0 2px">Cover – ${esc(b.title)}</h3><div class="sub">${esc(b.book_id)} · ${esc((b.author || "").trim())}</div>
+      <div class="sub" id="candMsg" style="margin-top:12px">Searching Google Books and Open Library…</div>
+      <div class="cands" id="cands"></div>
+      <label class="sub" style="display:block;margin-top:6px">…or paste an image link</label>
+      <input type="text" id="coverUrl" placeholder="https://…" value="${esc(b.cover_url || "")}" style="width:100%;margin-top:4px">
+      <div style="display:flex;gap:8px;justify-content:space-between;margin-top:14px;flex-wrap:wrap">
+        <button class="btn" id="coverRemove">Remove cover</button>
+        <span style="display:flex;gap:8px"><button class="btn" id="coverCancel">Cancel</button><button class="btn primary" id="coverSave">Save</button></span></div></div>`;
+    $("modal").classList.add("open");
+    const close = () => { $("modal").classList.remove("open"); $("modalBox").classList.remove("wide"); };
+    $("coverCancel").addEventListener("click", close);
+    const save = async (upd) => {
+      const { error } = await sb.from("books").update(upd).eq("book_id", id);
+      if (error) return toast("Failed: " + error.message);
+      close(); toast("Cover saved"); loadAll();
+    };
+    $("coverRemove").addEventListener("click", () => save({ cover_url: null }));
+    $("coverSave").addEventListener("click", () => {
+      const url = $("coverUrl").value.trim();
+      if (url && !/^https:\/\//i.test(url)) return toast("The link must start with https://");
+      const upd = { cover_url: url || null };
+      if (chosen && chosen.desc && chosen.url === url && !b.description) upd.description = chosen.desc;
+      save(upd);
+    });
+    const cands = await searchCovers(b);
+    if (!$("cands")) return;
+    $("candMsg").textContent = cands.length ? "Click the right cover, then Save." : "No covers found online. Paste an image link below, or leave it to show a designed cover.";
+    $("cands").innerHTML = cands.map((c, i) => `<button class="cand ${c.url === b.cover_url ? "sel" : ""}" data-i="${i}">
+      <img src="${esc(c.url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.cand').remove()">${esc(c.title).slice(0, 40)}<br>${esc(c.src)}</button>`).join("");
+    $("cands").querySelectorAll(".cand").forEach(el => el.addEventListener("click", () => {
+      chosen = cands[+el.dataset.i]; $("coverUrl").value = chosen.url;
+      $("cands").querySelectorAll(".cand").forEach(x => x.classList.toggle("sel", x === el));
+    }));
   }
 
   // Settings
