@@ -138,6 +138,7 @@
       <button class="tab" role="tab" data-tab="books">Books<span class="c" id="c-books"></span></button>
       <button class="tab" role="tab" data-tab="people">Employees<span class="c" id="c-people"></span></button>
       <button class="tab" role="tab" data-tab="emails">Emails<span class="c" id="c-emails"></span></button>
+      <button class="tab" role="tab" data-tab="suggestions">Suggestions<span class="c" id="c-sugg"></span></button>
       <button class="tab" role="tab" data-tab="upload">Upload Excel</button>
       <button class="tab" role="tab" data-tab="settings">Settings</button>
       <button class="tab" role="tab" data-tab="qr">QR code</button>
@@ -215,12 +216,13 @@
   async function loadAll() {
     $("view").innerHTML = '<div class="panel"><div class="empty">Loading…</div></div>';
     try {
-      const [books, members, tx, activity, emails, reservations, settings] = await Promise.all([
+      const [books, members, tx, activity, emails, reservations, settings, suggestions, votes] = await Promise.all([
         fetchAll("books", "title", true), fetchAll("members", "name", true), fetchAll("transactions", "issue_date"),
         fetchAll("activity_log", "created_at"), fetchAll("email_log", "created_at"),
         fetchAll("reservations", "created_at", true), fetchAll("settings", "key", true),
+        fetchAll("book_suggestions", "created_at").catch(() => []), fetchAll("suggestion_votes", "created_at").catch(() => []),
       ]);
-      Object.assign(S, { books, members, tx, activity, emails, reservations,
+      Object.assign(S, { books, members, tx, activity, emails, reservations, suggestions, votes,
         settings: Object.fromEntries(settings.map(r => [r.key, r.value])) });
       renderStats(); render();
     } catch (e) {
@@ -255,7 +257,8 @@
       ["In queue", S.reservations.filter(isActiveRes).length], ["Borrowers", borrowers], ["Actions (30 days)", acts],
     ];
     $("stats").innerHTML = tiles.map(([k, v, a]) => `<div class="stat ${a ? "alert" : ""}"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
-    $("c-activity").textContent = S.activity.length; $("c-report").textContent = S.tx.length + S.reservations.length; $("c-books").textContent = S.books.length;
+    $("c-activity").textContent = S.activity.length; $("c-report").textContent = S.tx.length + S.reservations.length;
+    $("c-sugg").textContent = (S.suggestions || []).filter(x => x.status === "new").length || ""; $("c-books").textContent = S.books.length;
     $("c-people").textContent = S.members.filter(m => m.active).length; $("c-emails").textContent = S.emails.length;
   }
 
@@ -295,7 +298,7 @@
 
   function render(keepFocus) {
     const pos = keepFocus && $("q") ? $("q").selectionStart : null;
-    ({ report: viewReport, activity: viewActivity, books: viewBooks, people: viewPeople, emails: viewEmails, upload: viewUpload, settings: viewSettings, qr: viewQr })[S.tab]();
+    ({ report: viewReport, activity: viewActivity, books: viewBooks, people: viewPeople, emails: viewEmails, upload: viewUpload, settings: viewSettings, suggestions: viewSuggestions, qr: viewQr })[S.tab]();
     if (pos !== null && $("q")) { $("q").focus(); $("q").setSelectionRange(pos, pos); }
   }
 
@@ -794,6 +797,34 @@
     $("cands").querySelectorAll(".cand").forEach(el => el.addEventListener("click", () => {
       chosen = cands[+el.dataset.i]; $("coverUrl").value = chosen.url;
       $("cands").querySelectorAll(".cand").forEach(x => x.classList.toggle("sel", x === el));
+    }));
+  }
+
+  // Book suggestions from staff
+  const SG = { new: ["info", "New"], planned: ["warn", "Planned"], added: ["ok", "Added"], declined: ["mute", "Not this time"] };
+  function viewSuggestions() {
+    const mb = memberBy();
+    const count = new Map(); (S.votes || []).forEach(v => count.set(v.suggestion_id, (count.get(v.suggestion_id) || 0) + 1));
+    let rows = (S.suggestions || []).map(x => ({ ...x, votes: count.get(x.id) || 0, name: mb.get(x.email)?.name || "", dept: mb.get(x.email)?.department || "" }));
+    if (S.filter !== "all") rows = rows.filter(x => x.status === S.filter);
+    rows = rows.filter(match).sort((a, b) => b.votes - a.votes || b.created_at.localeCompare(a.created_at));
+    $("view").innerHTML = toolbar([["all", "All suggestions"], ["new", "New"], ["planned", "Planned"], ["added", "Added"], ["declined", "Not this time"]]) + table(
+      ["Suggested", "Book", "Suggested by", "Why", "Want it", "Status"],
+      rows.map(x => `<tr><td class="nowrap">${fmt(x.created_at, false)}</td>
+        <td><b style="font-weight:600">${esc(x.title)}</b><div class="sub">${esc(x.author || "")}</div>
+          ${x.link ? `<a class="sub" href="${esc(x.link)}" target="_blank" rel="noopener noreferrer">Open link ↗</a>` : ""}</td>
+        <td>${esc(x.name || "—")}<div class="sub">${esc(x.email)}${x.dept ? " · " + esc(x.dept) : ""}</div></td>
+        <td class="sub" style="max-width:340px">${esc(x.reason || "")}</td>
+        <td><b>${x.votes}</b></td>
+        <td><select data-sg="${x.id}">${Object.entries(SG).map(([k, [, l]]) => `<option value="${k}" ${x.status === k ? "selected" : ""}>${l}</option>`).join("")}</select></td></tr>`),
+      "No suggestions yet. They appear here when staff use the Book suggestions tab on the library page.");
+    wireToolbar(() => rows.map(x => ({ Suggested: fmt(x.created_at, false), Title: x.title, Author: x.author || "", "Suggested by": x.name,
+      Email: x.email, Department: x.dept, Why: x.reason || "", Link: x.link || "", "Want it": x.votes, Status: SG[x.status]?.[1] || x.status })));
+    document.querySelectorAll("[data-sg]").forEach(sel => sel.addEventListener("change", async () => {
+      const { error } = await sb.from("book_suggestions").update({ status: sel.value, updated_at: new Date().toISOString() }).eq("id", +sel.dataset.sg);
+      if (error) return toast("Failed: " + error.message);
+      const x = S.suggestions.find(y => y.id === +sel.dataset.sg); if (x) x.status = sel.value;
+      toast("Status updated"); renderStats();
     }));
   }
 
